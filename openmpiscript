@@ -1,0 +1,90 @@
+#!/bin/sh
+MPDIR=/usr/mpi/gcc/openmpi-4.0.0rc5
+EXINT="docker0,virbr0"
+
+# If MPDIR is not set, then use a default value
+if [ -z $MPDIR ]; then                                             
+    echo "WARNING: Using default value for \$MPDIR in openmpiscript"
+    MPDIR=/usr/lib64/openmpi                                       
+fi                                                                 
+PATH=$MPDIR/bin:.:$PATH                                            
+export PATH                                                        
+                                                                   
+# If EXINT is not set, then use some default values
+if [ -z $EXINT ]; then                                             
+    echo "WARNING: Using default values for \$EXINT in openmpiscript"
+    EXINT="docker0,virbr0"                                         
+fi                                                                 
+                                                                   
+# The condor_ssh and sshd.sh helper scripts reside in $(LIBEXEC)
+CONDOR_SSH=`condor_config_val libexec`                             
+CONDOR_SSH=$CONDOR_SSH/condor_ssh                                  
+                                                                   
+SSHD_SH=`condor_config_val libexec`                                
+SSHD_SH=$SSHD_SH/sshd.sh                                           
+                                                                   
+# Set up SSHD on the node 
+. $SSHD_SH $_CONDOR_PROCNO $_CONDOR_NPROCS                         
+                                                                   
+# If not the head node, just sleep forever to let the SSHDs run    
+if [ $_CONDOR_PROCNO -ne 0 ]                                       
+then                                                               
+    wait                                                           
+    sshd_cleanup                                                   
+    exit 0                                                         
+fi           
+
+EXECUTABLE=$1                                                      
+shift  
+
+# The binary is copied but the executable flag may be cleared.     
+chmod +x $EXECUTABLE                                               
+                                                                   
+# Set the location of the contact file                             
+CONDOR_CONTACT_FILE=$_CONDOR_SCRATCH_DIR/contact                   
+export CONDOR_CONTACT_FILE   
+
+# The second field in the contact file contains the node ranks.    
+# mpirun will use a list a of these node ranks,                    
+# and condor_ssh will translate them into a hostname:port.         
+#sort -n -k 1 < $CONDOR_CONTACT_FILE | awk '{print $1}' > machines 
+sort -n -k 1 < $CONDOR_CONTACT_FILE | awk '{print $2}' > machines  
+                                                                   
+# Check for which ssh agent to use because one or the other        
+# have each been deprecated at one OpenMPI version or another.     
+_MCA_FAIL=true                                                     
+for mca_ssh_agent in orte_rsh_agent plm_rsh_agent                  
+do                                                                 
+    if `ompi_info -a | grep \"${mca_ssh_agent}\" 1>/dev/null 2>&1` 
+    then                                                           
+        if `ompi_info -a | grep \"${mca_ssh_agent}\" | grep deprecated 1>/dev/null 2>
+&1`; then continue; fi
+                                                                   
+        _MCA_FAIL=false                                            
+                                                                   
+        # set MCA values for running on HTCondor                   
+        export OMPI_MCA_plm_rsh_no_tree_spawn="true" # disable ssh tree spawn    
+        export OMPI_MCA_btl_tcp_if_exclude="lo,$EXINT" # exclude network interfaces
+
+        _CONDOR_RCPUS=`condor_q -global -format '%d\n' RequestCpus | tail -1 | sed -n
+ 's/\([0-9][0-9]*\).*/\1/p'`
+
+
+        mpirun -v --prefix $MPDIR --mca $mca_ssh_agent $CONDOR_SSH -n `expr $_CONDOR_
+NPROCS \* $_CONDOR_RCPUS` -npernode $_CONDOR_RCPUS --host `paste -sd',' machines` -ov
+ersubscribe $EXECUTABLE $@
+        continue                                                   
+                                                                   
+    fi                                                             
+done
+
+if $_MCA_FAIL                                                      
+then                                                               
+    echo could not find a suitable MCA ssh agent                   
+    exit 255                                                       
+fi                                                                 
+                                                                   
+sshd_cleanup                                                       
+rm -f machines
+                                                                   
+exit $? 

@@ -1,0 +1,1 @@
+export PATH=/usr/mpi/gcc/openmpi-4.0.0rc5/bin/:$PATH

@@ -1,0 +1,17 @@
+######################################
+## Parallel example submit description file
+## without using a shared file system
+######################################
+universe = parallel
+getenv = true
+# full path to executable
+arguments =  /home/svallero/simple_mpi/mpitest
+executable = openmpiscript
+log = logfile
+output = $(CLUSTER).out
+error =  $(CLUSTER).err
+machine_count = 1
+request_cpus = 6
+should_transfer_files = yes
+when_to_transfer_output = on_exit
+queue
